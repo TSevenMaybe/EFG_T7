@@ -10,6 +10,8 @@ namespace server_list
 	using callback = std::function<void(bool, const std::unordered_set<game::netadr_t>&)>;
 	void request_servers(callback callback);
 
+	void request_servers_2(callback callback);
+
 	void add_favorite_server(game::netadr_t addr);
 	void remove_favorite_server(game::netadr_t addr);
 	using server_list = std::unordered_set<game::netadr_t>;

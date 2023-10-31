@@ -15,6 +15,9 @@
 #include <utils/cryptography.hpp>
 #include <utils/concurrency.hpp>
 
+#include "steamcmd.hpp"
+#include <thread>
+
 namespace party
 {
 	namespace
@@ -190,6 +193,11 @@ namespace party
 			}
 
 			const auto mod_id = info.get("modId");
+			const auto FastDL = info.get("sv_wwwBaseURL"); //Check fastDL dvar for url
+			const auto workshop_id = info.get("workshop_id"); //Check workshop_id dvar for id
+
+			printf("FastDL: %s\n", FastDL.c_str());
+			printf("Workshop id: %s\n", workshop_id.c_str());
 
 			//const auto hostname = info.get("sv_hostname");
 			const auto playmode = info.get("playmode");
@@ -200,8 +208,8 @@ namespace party
 			{
 				const auto usermap_id = workshop::get_usermap_publisher_id(mapname);
 
-				if (workshop::check_valid_usermap_id(mapname, usermap_id) &&
-					workshop::check_valid_mod_id(mod_id))
+				if (workshop::check_valid_usermap_id(mapname, usermap_id, workshop_id) &&
+					workshop::check_valid_mod_id(mod_id, workshop_id))
 				{
 					if (is_connecting_to_dedi)
 					{
@@ -211,6 +219,7 @@ namespace party
 					//connect_to_session(target, hostname, xuid, mode);
 					connect_to_lobby_with_mode(target, mode, mapname, gametype, usermap_id, mod_id);
 				}
+
 			}, scheduler::main);
 		}
 

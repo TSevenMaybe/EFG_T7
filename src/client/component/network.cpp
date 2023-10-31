@@ -187,7 +187,7 @@ namespace network
 	{
 		get_callbacks()[utils::string::to_lower(command)] = callback;
 	}
-
+	
 	void send(const game::netadr_t& address, const std::string& command, const std::string& data, const char separator)
 	{
 		std::string packet = "\xFF\xFF\xFF\xFF";

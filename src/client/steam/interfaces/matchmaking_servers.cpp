@@ -212,6 +212,47 @@ namespace steam
 			}
 		});
 
+		server_list::request_servers_2([](const bool success, const std::unordered_set<game::netadr_t>& s2)
+		{
+			const auto res = internet_response.load();
+			if (!res)
+			{
+				return;
+			}
+
+			if (!success)
+			{
+				res->RefreshComplete(internet_request, eServerFailedToRespond);
+				return;
+			}
+
+			if (s2.empty())
+			{
+				res->RefreshComplete(internet_request, eNoServersListedOnMasterServer);
+				return;
+			}
+
+			internet_servers.access([&s2](servers& srvs)
+				{
+					srvs = {};
+					srvs.reserve(s2.size());
+
+					for (auto& address : s2)
+					{
+						server new_server{};
+						new_server.address = address;
+						new_server.server_item = create_server_item(address, {}, 0, false);
+
+						srvs.push_back(new_server);
+					}
+				});
+
+			for (auto& srv : s2)
+			{
+				ping_server(srv, handle_internet_server_response);
+			}
+		});
+
 		return internet_request;
 	}
 

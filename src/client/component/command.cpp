@@ -183,12 +183,9 @@ namespace command
 		const auto is_registered = map.contains(lower_command);
 
 		map[std::move(lower_command)] = std::move(function);
-
-		if (is_registered)
-		{
-			return;
-		}
-
+		
+		if (is_registered) return;
+		
 		auto& allocator = *utils::memory::get_allocator();
 		auto* cmd_function = allocator.allocate<game::cmd_function_s>();
 		const auto* cmd_string = allocator.duplicate_string(command);
