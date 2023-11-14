@@ -134,7 +134,6 @@ These options are provided to select the TLS backend to use.
  - BearSSL: `--with-bearssl`
  - GnuTLS: `--with-gnutls`.
  - mbedTLS: `--with-mbedtls`
- - NSS: `--with-nss`
  - OpenSSL: `--with-openssl` (also for BoringSSL, AWS-LC, libressl, and quictls)
  - rustls: `--with-rustls`
  - Schannel: `--with-schannel`
@@ -163,6 +162,8 @@ library check.
 
 # Windows
 
+Building for Windows XP is required as a minimum.
+
 ## Building Windows DLLs and C runtime (CRT) linkage issues
 
  As a general rule, building a DLL with static CRT linkage is highly
@@ -184,12 +185,12 @@ multi-threaded dynamic C runtime.
 
  If you get linkage errors read section 5.7 of the FAQ document.
 
-## MinGW32
+## mingw-w64
 
-Make sure that MinGW32's bin directory is in the search path, for example:
+Make sure that mingw-w64's bin directory is in the search path, for example:
 
 ```cmd
-set PATH=c:\mingw32\bin;%PATH%
+set PATH=c:\mingw-w64\bin;%PATH%
 ```
 
 then run `mingw32-make mingw32` in the root dir. There are other
@@ -247,7 +248,7 @@ Requires DJGPP in the search path and pointing to the Watt-32 stack via
 
 Run `make -f Makefile.dist djgpp` in the root curl dir.
 
-For build configuration options, please see the MinGW32 section.
+For build configuration options, please see the mingw-w64 section.
 
 Notes:
 
@@ -262,7 +263,7 @@ Notes:
 
 Run `make -f Makefile.dist amiga` in the root curl dir.
 
-For build configuration options, please see the MinGW32 section.
+For build configuration options, please see the mingw-w64 section.
 
 ## Disabling Specific Protocols in Windows builds
 
@@ -423,7 +424,7 @@ OpenSSL, follow the OpenSSL build instructions and then install `libssl.a` and
 OpenSSL like this:
 
 ```bash
-LIBS="-lssl -lcrypto -lc++" # For OpenSSL/BoringSSL. In general, you will need to the SSL/TLS layer's transtive dependencies if you are linking statically.
+LIBS="-lssl -lcrypto -lc++" # For OpenSSL/BoringSSL. In general, you will need to the SSL/TLS layer's transitive dependencies if you are linking statically.
 ./configure --host aarch64-linux-android --with-pic --disable-shared --with-openssl="$TOOLCHAIN/sysroot/usr"
 ```
 
@@ -525,7 +526,12 @@ disabling support for some feature:
  - `--disable-alt-svc` (HTTP Alt-Svc)
  - `--disable-ares` (the C-ARES DNS library)
  - `--disable-cookies` (HTTP cookies)
- - `--disable-crypto-auth` (cryptographic authentication)
+ - `--disable-basic-auth` (cryptographic authentication)
+ - `--disable-bearer-auth` (cryptographic authentication)
+ - `--disable-digest-auth` (cryptographic authentication)
+ - `--disable-kerberos-auth` (cryptographic authentication)
+ - `--disable-negotiate-auth` (cryptographic authentication)
+ - `--disable-aws` (cryptographic authentication)
  - `--disable-dateparse` (date parsing for time conditionals)
  - `--disable-dnsshuffle` (internal server load spreading)
  - `--disable-doh` (DNS-over-HTTP)

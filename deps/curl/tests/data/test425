@@ -26,13 +26,13 @@ Content-Type: text/html
 <server>
 http
 </server>
- <name>
+<name>
 HTTP PUT with path ending with slash + query
- </name>
- <command>
--T log/up%TESTNUMBER http://%HOSTIP:%HTTPPORT/%TESTNUMBER/?fullpath
+</name>
+<command>
+-T %LOGDIR/up%TESTNUMBER http://%HOSTIP:%HTTPPORT/%TESTNUMBER/?fullpath
 </command>
-<file name="log/up%TESTNUMBER">
+<file name="%LOGDIR/up%TESTNUMBER">
 content
 </file>
 </client>

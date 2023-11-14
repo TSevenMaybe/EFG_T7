@@ -131,9 +131,6 @@ static bool blobcmp(struct curl_blob *first, struct curl_blob *second)
 }
 
 #ifdef USE_SSL
-static const struct alpn_spec ALPN_SPEC_H10 = {
-  { ALPN_HTTP_1_0 }, 1
-};
 static const struct alpn_spec ALPN_SPEC_H11 = {
   { ALPN_HTTP_1_1 }, 1
 };
@@ -147,51 +144,83 @@ static const struct alpn_spec *alpn_get_spec(int httpwant, bool use_alpn)
 {
   if(!use_alpn)
     return NULL;
-  if(httpwant == CURL_HTTP_VERSION_1_0)
-    return &ALPN_SPEC_H10;
 #ifdef USE_HTTP2
   if(httpwant >= CURL_HTTP_VERSION_2)
     return &ALPN_SPEC_H2_H11;
+#else
+  (void)httpwant;
 #endif
+  /* Use the ALPN protocol "http/1.1" for HTTP/1.x.
+     Avoid "http/1.0" because some servers don't support it. */
   return &ALPN_SPEC_H11;
 }
 #endif /* USE_SSL */
 
 
-bool
-Curl_ssl_config_matches(struct ssl_primary_config *data,
-                        struct ssl_primary_config *needle)
+void Curl_ssl_easy_config_init(struct Curl_easy *data)
 {
-  if((data->version == needle->version) &&
-     (data->version_max == needle->version_max) &&
-     (data->ssl_options == needle->ssl_options) &&
-     (data->verifypeer == needle->verifypeer) &&
-     (data->verifyhost == needle->verifyhost) &&
-     (data->verifystatus == needle->verifystatus) &&
-     blobcmp(data->cert_blob, needle->cert_blob) &&
-     blobcmp(data->ca_info_blob, needle->ca_info_blob) &&
-     blobcmp(data->issuercert_blob, needle->issuercert_blob) &&
-     Curl_safecmp(data->CApath, needle->CApath) &&
-     Curl_safecmp(data->CAfile, needle->CAfile) &&
-     Curl_safecmp(data->issuercert, needle->issuercert) &&
-     Curl_safecmp(data->clientcert, needle->clientcert) &&
-#ifdef USE_TLS_SRP
-     !Curl_timestrcmp(data->username, needle->username) &&
-     !Curl_timestrcmp(data->password, needle->password) &&
+  /*
+   * libcurl 7.10 introduced SSL verification *by default*! This needs to be
+   * switched off unless wanted.
+   */
+  data->set.ssl.primary.verifypeer = TRUE;
+  data->set.ssl.primary.verifyhost = TRUE;
+  data->set.ssl.primary.sessionid = TRUE; /* session ID caching by default */
+#ifndef CURL_DISABLE_PROXY
+  data->set.proxy_ssl = data->set.ssl;
 #endif
-     strcasecompare(data->cipher_list, needle->cipher_list) &&
-     strcasecompare(data->cipher_list13, needle->cipher_list13) &&
-     strcasecompare(data->curves, needle->curves) &&
-     strcasecompare(data->CRLfile, needle->CRLfile) &&
-     strcasecompare(data->pinned_key, needle->pinned_key))
+}
+
+static bool
+match_ssl_primary_config(struct Curl_easy *data,
+                         struct ssl_primary_config *c1,
+                         struct ssl_primary_config *c2)
+{
+  (void)data;
+  if((c1->version == c2->version) &&
+     (c1->version_max == c2->version_max) &&
+     (c1->ssl_options == c2->ssl_options) &&
+     (c1->verifypeer == c2->verifypeer) &&
+     (c1->verifyhost == c2->verifyhost) &&
+     (c1->verifystatus == c2->verifystatus) &&
+     blobcmp(c1->cert_blob, c2->cert_blob) &&
+     blobcmp(c1->ca_info_blob, c2->ca_info_blob) &&
+     blobcmp(c1->issuercert_blob, c2->issuercert_blob) &&
+     Curl_safecmp(c1->CApath, c2->CApath) &&
+     Curl_safecmp(c1->CAfile, c2->CAfile) &&
+     Curl_safecmp(c1->issuercert, c2->issuercert) &&
+     Curl_safecmp(c1->clientcert, c2->clientcert) &&
+#ifdef USE_TLS_SRP
+     !Curl_timestrcmp(c1->username, c2->username) &&
+     !Curl_timestrcmp(c1->password, c2->password) &&
+#endif
+     strcasecompare(c1->cipher_list, c2->cipher_list) &&
+     strcasecompare(c1->cipher_list13, c2->cipher_list13) &&
+     strcasecompare(c1->curves, c2->curves) &&
+     strcasecompare(c1->CRLfile, c2->CRLfile) &&
+     strcasecompare(c1->pinned_key, c2->pinned_key))
     return TRUE;
 
   return FALSE;
 }
 
-bool
-Curl_clone_primary_ssl_config(struct ssl_primary_config *source,
-                              struct ssl_primary_config *dest)
+bool Curl_ssl_conn_config_match(struct Curl_easy *data,
+                                struct connectdata *candidate,
+                                bool proxy)
+{
+#ifndef CURL_DISABLE_PROXY
+  if(proxy)
+    return match_ssl_primary_config(data, &data->set.proxy_ssl.primary,
+                                    &candidate->proxy_ssl_config);
+#else
+  (void)proxy;
+#endif
+  return match_ssl_primary_config(data, &data->set.ssl.primary,
+                                  &candidate->ssl_config);
+}
+
+static bool clone_ssl_primary_config(struct ssl_primary_config *source,
+                                     struct ssl_primary_config *dest)
 {
   dest->version = source->version;
   dest->version_max = source->version_max;
@@ -221,7 +250,7 @@ Curl_clone_primary_ssl_config(struct ssl_primary_config *source,
   return TRUE;
 }
 
-void Curl_free_primary_ssl_config(struct ssl_primary_config *sslc)
+static void Curl_free_primary_ssl_config(struct ssl_primary_config *sslc)
 {
   Curl_safefree(sslc->CApath);
   Curl_safefree(sslc->CAfile);
@@ -239,6 +268,111 @@ void Curl_free_primary_ssl_config(struct ssl_primary_config *sslc)
   Curl_safefree(sslc->username);
   Curl_safefree(sslc->password);
 #endif
+}
+
+CURLcode Curl_ssl_easy_config_complete(struct Curl_easy *data)
+{
+  data->set.ssl.primary.CApath = data->set.str[STRING_SSL_CAPATH];
+  data->set.ssl.primary.CAfile = data->set.str[STRING_SSL_CAFILE];
+  data->set.ssl.primary.CRLfile = data->set.str[STRING_SSL_CRLFILE];
+  data->set.ssl.primary.issuercert = data->set.str[STRING_SSL_ISSUERCERT];
+  data->set.ssl.primary.issuercert_blob = data->set.blobs[BLOB_SSL_ISSUERCERT];
+  data->set.ssl.primary.cipher_list =
+    data->set.str[STRING_SSL_CIPHER_LIST];
+  data->set.ssl.primary.cipher_list13 =
+    data->set.str[STRING_SSL_CIPHER13_LIST];
+  data->set.ssl.primary.pinned_key =
+    data->set.str[STRING_SSL_PINNEDPUBLICKEY];
+  data->set.ssl.primary.cert_blob = data->set.blobs[BLOB_CERT];
+  data->set.ssl.primary.ca_info_blob = data->set.blobs[BLOB_CAINFO];
+  data->set.ssl.primary.curves = data->set.str[STRING_SSL_EC_CURVES];
+#ifdef USE_TLS_SRP
+  data->set.ssl.primary.username = data->set.str[STRING_TLSAUTH_USERNAME];
+  data->set.ssl.primary.password = data->set.str[STRING_TLSAUTH_PASSWORD];
+#endif
+  data->set.ssl.cert_type = data->set.str[STRING_CERT_TYPE];
+  data->set.ssl.key = data->set.str[STRING_KEY];
+  data->set.ssl.key_type = data->set.str[STRING_KEY_TYPE];
+  data->set.ssl.key_passwd = data->set.str[STRING_KEY_PASSWD];
+  data->set.ssl.primary.clientcert = data->set.str[STRING_CERT];
+  data->set.ssl.key_blob = data->set.blobs[BLOB_KEY];
+
+#ifndef CURL_DISABLE_PROXY
+  data->set.proxy_ssl.primary.CApath = data->set.str[STRING_SSL_CAPATH_PROXY];
+  data->set.proxy_ssl.primary.CAfile = data->set.str[STRING_SSL_CAFILE_PROXY];
+  data->set.proxy_ssl.primary.cipher_list =
+    data->set.str[STRING_SSL_CIPHER_LIST_PROXY];
+  data->set.proxy_ssl.primary.cipher_list13 =
+    data->set.str[STRING_SSL_CIPHER13_LIST_PROXY];
+  data->set.proxy_ssl.primary.pinned_key =
+    data->set.str[STRING_SSL_PINNEDPUBLICKEY_PROXY];
+  data->set.proxy_ssl.primary.cert_blob = data->set.blobs[BLOB_CERT_PROXY];
+  data->set.proxy_ssl.primary.ca_info_blob =
+    data->set.blobs[BLOB_CAINFO_PROXY];
+  data->set.proxy_ssl.primary.issuercert =
+    data->set.str[STRING_SSL_ISSUERCERT_PROXY];
+  data->set.proxy_ssl.primary.issuercert_blob =
+    data->set.blobs[BLOB_SSL_ISSUERCERT_PROXY];
+  data->set.proxy_ssl.primary.CRLfile =
+    data->set.str[STRING_SSL_CRLFILE_PROXY];
+  data->set.proxy_ssl.cert_type = data->set.str[STRING_CERT_TYPE_PROXY];
+  data->set.proxy_ssl.key = data->set.str[STRING_KEY_PROXY];
+  data->set.proxy_ssl.key_type = data->set.str[STRING_KEY_TYPE_PROXY];
+  data->set.proxy_ssl.key_passwd = data->set.str[STRING_KEY_PASSWD_PROXY];
+  data->set.proxy_ssl.primary.clientcert = data->set.str[STRING_CERT_PROXY];
+  data->set.proxy_ssl.key_blob = data->set.blobs[BLOB_KEY_PROXY];
+#ifdef USE_TLS_SRP
+  data->set.proxy_ssl.primary.username =
+    data->set.str[STRING_TLSAUTH_USERNAME_PROXY];
+  data->set.proxy_ssl.primary.password =
+    data->set.str[STRING_TLSAUTH_PASSWORD_PROXY];
+#endif
+#endif /* CURL_DISABLE_PROXY */
+
+  return CURLE_OK;
+}
+
+CURLcode Curl_ssl_conn_config_init(struct Curl_easy *data,
+                                   struct connectdata *conn)
+{
+  /* Clone "primary" SSL configurations from the esay handle to
+   * the connection. They are used for connection cache matching and
+   * probably outlive the easy handle */
+  if(!clone_ssl_primary_config(&data->set.ssl.primary, &conn->ssl_config))
+    return CURLE_OUT_OF_MEMORY;
+#ifndef CURL_DISABLE_PROXY
+  if(!clone_ssl_primary_config(&data->set.proxy_ssl.primary,
+                               &conn->proxy_ssl_config))
+    return CURLE_OUT_OF_MEMORY;
+#endif
+  return CURLE_OK;
+}
+
+void Curl_ssl_conn_config_cleanup(struct connectdata *conn)
+{
+  Curl_free_primary_ssl_config(&conn->ssl_config);
+#ifndef CURL_DISABLE_PROXY
+  Curl_free_primary_ssl_config(&conn->proxy_ssl_config);
+#endif
+}
+
+void Curl_ssl_conn_config_update(struct Curl_easy *data, bool for_proxy)
+{
+  /* May be called on an easy that has no connection yet */
+  if(data->conn) {
+    struct ssl_primary_config *src, *dest;
+#ifndef CURL_DISABLE_PROXY
+    src = for_proxy? &data->set.proxy_ssl.primary : &data->set.ssl.primary;
+    dest = for_proxy? &data->conn->proxy_ssl_config : &data->conn->ssl_config;
+#else
+    (void)for_proxy;
+    src = &data->set.ssl.primary;
+    dest = &data->conn->ssl_config;
+#endif
+    dest->verifyhost = src->verifyhost;
+    dest->verifypeer = src->verifypeer;
+    dest->verifystatus = src->verifystatus;
+  }
 }
 
 #ifdef USE_SSL
@@ -417,7 +551,7 @@ bool Curl_ssl_getsessionid(struct Curl_cfilter *cf,
   DEBUGASSERT(ssl_config->primary.sessionid);
 
   if(!ssl_config->primary.sessionid || !data->state.session)
-    /* session ID re-use is disabled or the session cache has not been
+    /* session ID reuse is disabled or the session cache has not been
        setup */
     return TRUE;
 
@@ -441,7 +575,7 @@ bool Curl_ssl_getsessionid(struct Curl_cfilter *cf,
          cf->conn->conn_to_port == check->conn_to_port)) &&
        (connssl->port == check->remote_port) &&
        strcasecompare(cf->conn->handler->scheme, check->scheme) &&
-       Curl_ssl_config_matches(conn_config, &check->ssl_config)) {
+       match_ssl_primary_config(data, conn_config, &check->ssl_config)) {
       /* yes, we have a session ID! */
       (*general_age)++;          /* increase general age */
       check->age = *general_age; /* set this as used in this age */
@@ -453,7 +587,7 @@ bool Curl_ssl_getsessionid(struct Curl_cfilter *cf,
     }
   }
 
-  DEBUGF(infof(data, DMSG(data, "%s Session ID in cache for %s %s://%s:%d"),
+  DEBUGF(infof(data, "%s Session ID in cache for %s %s://%s:%d",
                no_match? "Didn't find": "Found",
                Curl_ssl_cf_is_proxy(cf) ? "proxy" : "host",
                cf->conn->handler->scheme, connssl->hostname, connssl->port));
@@ -590,7 +724,7 @@ CURLcode Curl_ssl_addsessionid(struct Curl_cfilter *cf,
   store->remote_port = connssl->port;
   store->scheme = cf->conn->handler->scheme;
 
-  if(!Curl_clone_primary_ssl_config(conn_config, &store->ssl_config)) {
+  if(!clone_ssl_primary_config(conn_config, &store->ssl_config)) {
     Curl_free_primary_ssl_config(&store->ssl_config);
     store->sessionid = NULL; /* let caller free sessionid */
     free(clone_host);
@@ -601,8 +735,8 @@ CURLcode Curl_ssl_addsessionid(struct Curl_cfilter *cf,
   if(added)
     *added = TRUE;
 
-  DEBUGF(infof(data, DMSG(data, "Added Session ID to cache for %s://%s:%d"
-               " [%s]"), store->scheme, store->name, store->remote_port,
+  DEBUGF(infof(data, "Added Session ID to cache for %s://%s:%d [%s]",
+               store->scheme, store->name, store->remote_port,
                Curl_ssl_cf_is_proxy(cf) ? "PROXY" : "server"));
   return CURLE_OK;
 }
@@ -629,25 +763,21 @@ void Curl_ssl_close_all(struct Curl_easy *data)
   Curl_ssl->close_all(data);
 }
 
-int Curl_ssl_get_select_socks(struct Curl_cfilter *cf, struct Curl_easy *data,
-                              curl_socket_t *socks)
+void Curl_ssl_adjust_pollset(struct Curl_cfilter *cf, struct Curl_easy *data,
+                              struct easy_pollset *ps)
 {
-  struct ssl_connect_data *connssl = cf->ctx;
-  curl_socket_t sock = Curl_conn_cf_get_socket(cf->next, data);
-
-  if(sock != CURL_SOCKET_BAD) {
-    if(connssl->connecting_state == ssl_connect_2_writing) {
-      /* write mode */
-      socks[0] = sock;
-      return GETSOCK_WRITESOCK(0);
-    }
-    if(connssl->connecting_state == ssl_connect_2_reading) {
-      /* read mode */
-      socks[0] = sock;
-      return GETSOCK_READSOCK(0);
+  if(!cf->connected) {
+    struct ssl_connect_data *connssl = cf->ctx;
+    curl_socket_t sock = Curl_conn_cf_get_socket(cf->next, data);
+    if(sock != CURL_SOCKET_BAD) {
+      if(connssl->connecting_state == ssl_connect_2_writing) {
+        Curl_pollset_set_out_only(data, ps, sock);
+      }
+      else {
+        Curl_pollset_set_in_only(data, ps, sock);
+      }
     }
   }
-  return GETSOCK_BLANK;
 }
 
 /* Selects an SSL crypto engine
@@ -781,20 +911,6 @@ CURLcode Curl_ssl_push_certinfo_len(struct Curl_easy *data,
   return result;
 }
 
-/*
- * This is a convenience function for push_certinfo_len that takes a zero
- * terminated value.
- */
-CURLcode Curl_ssl_push_certinfo(struct Curl_easy *data,
-                                int certnum,
-                                const char *label,
-                                const char *value)
-{
-  size_t valuelen = strlen(value);
-
-  return Curl_ssl_push_certinfo_len(data, certnum, label, value, valuelen);
-}
-
 CURLcode Curl_ssl_random(struct Curl_easy *data,
                          unsigned char *entropy,
                          size_t length)
@@ -897,6 +1013,9 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
   FILE *fp;
   unsigned char *buf = NULL, *pem_ptr = NULL;
   CURLcode result = CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+#ifdef CURL_DISABLE_VERBOSE_STRINGS
+  (void)data;
+#endif
 
   /* if a path wasn't specified, don't pin */
   if(!pinnedpubkey)
@@ -907,8 +1026,8 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
   /* only do this if pinnedpubkey starts with "sha256//", length 8 */
   if(strncmp(pinnedpubkey, "sha256//", 8) == 0) {
     CURLcode encode;
-    size_t encodedlen, pinkeylen;
-    char *encoded, *pinkeycopy, *begin_pos, *end_pos;
+    size_t encodedlen = 0, pinkeylen;
+    char *encoded = NULL, *pinkeycopy, *begin_pos, *end_pos;
     unsigned char *sha256sumdigest;
 
     if(!Curl_ssl->sha256sum) {
@@ -921,14 +1040,12 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
     if(!sha256sumdigest)
       return CURLE_OUT_OF_MEMORY;
     encode = Curl_ssl->sha256sum(pubkey, pubkeylen,
-                        sha256sumdigest, CURL_SHA256_DIGEST_LENGTH);
+                                 sha256sumdigest, CURL_SHA256_DIGEST_LENGTH);
 
-    if(encode != CURLE_OK)
-      return encode;
-
-    encode = Curl_base64_encode((char *)sha256sumdigest,
-                                CURL_SHA256_DIGEST_LENGTH, &encoded,
-                                &encodedlen);
+    if(!encode)
+      encode = Curl_base64_encode((char *)sha256sumdigest,
+                                  CURL_SHA256_DIGEST_LENGTH, &encoded,
+                                  &encodedlen);
     Curl_safefree(sha256sumdigest);
 
     if(encode)
@@ -1172,13 +1289,13 @@ static CURLcode multissl_connect_nonblocking(struct Curl_cfilter *cf,
   return Curl_ssl->connect_nonblocking(cf, data, done);
 }
 
-static int multissl_get_select_socks(struct Curl_cfilter *cf,
+static void multissl_adjust_pollset(struct Curl_cfilter *cf,
                                      struct Curl_easy *data,
-                                     curl_socket_t *socks)
+                                     struct easy_pollset *ps)
 {
   if(multissl_setup(NULL))
-    return 0;
-  return Curl_ssl->get_select_socks(cf, data, socks);
+    return;
+  Curl_ssl->adjust_pollset(cf, data, ps);
 }
 
 static void *multissl_get_internals(struct ssl_connect_data *connssl,
@@ -1230,7 +1347,7 @@ static const struct Curl_ssl Curl_ssl_multi = {
   Curl_none_cert_status_request,     /* cert_status_request */
   multissl_connect,                  /* connect */
   multissl_connect_nonblocking,      /* connect_nonblocking */
-  multissl_get_select_socks,         /* getsock */
+  multissl_adjust_pollset,          /* adjust_pollset */
   multissl_get_internals,            /* get_internals */
   multissl_close,                    /* close_one */
   Curl_none_close_all,               /* close_all */
@@ -1256,12 +1373,8 @@ const struct Curl_ssl *Curl_ssl =
   &Curl_ssl_sectransp;
 #elif defined(USE_GNUTLS)
   &Curl_ssl_gnutls;
-#elif defined(USE_GSKIT)
-  &Curl_ssl_gskit;
 #elif defined(USE_MBEDTLS)
   &Curl_ssl_mbedtls;
-#elif defined(USE_NSS)
-  &Curl_ssl_nss;
 #elif defined(USE_RUSTLS)
   &Curl_ssl_rustls;
 #elif defined(USE_OPENSSL)
@@ -1284,14 +1397,8 @@ static const struct Curl_ssl *available_backends[] = {
 #if defined(USE_GNUTLS)
   &Curl_ssl_gnutls,
 #endif
-#if defined(USE_GSKIT)
-  &Curl_ssl_gskit,
-#endif
 #if defined(USE_MBEDTLS)
   &Curl_ssl_mbedtls,
-#endif
-#if defined(USE_NSS)
-  &Curl_ssl_nss,
 #endif
 #if defined(USE_OPENSSL)
   &Curl_ssl_openssl,
@@ -1520,7 +1627,8 @@ static void ssl_cf_close(struct Curl_cfilter *cf,
 
   CF_DATA_SAVE(save, cf, data);
   cf_close(cf, data);
-  cf->next->cft->close(cf->next, data);
+  if(cf->next)
+    cf->next->cft->do_close(cf->next, data);
   CF_DATA_RESTORE(cf, save);
 }
 
@@ -1538,13 +1646,14 @@ static CURLcode ssl_cf_connect(struct Curl_cfilter *cf,
   }
 
   CF_DATA_SAVE(save, cf, data);
+  CURL_TRC_CF(data, cf, "cf_connect()");
   (void)connssl;
   DEBUGASSERT(data->conn);
   DEBUGASSERT(data->conn == cf->conn);
   DEBUGASSERT(connssl);
   DEBUGASSERT(cf->conn->host.name);
 
-  result = cf->next->cft->connect(cf->next, data, blocking, done);
+  result = cf->next->cft->do_connect(cf->next, data, blocking, done);
   if(result || !*done)
     goto out;
 
@@ -1567,6 +1676,7 @@ static CURLcode ssl_cf_connect(struct Curl_cfilter *cf,
     DEBUGASSERT(connssl->state == ssl_connection_complete);
   }
 out:
+  CURL_TRC_CF(data, cf, "cf_connect() -> %d, done=%d", result, *done);
   CF_DATA_RESTORE(cf, save);
   return result;
 }
@@ -1608,6 +1718,7 @@ static ssize_t ssl_cf_recv(struct Curl_cfilter *cf,
   ssize_t nread;
 
   CF_DATA_SAVE(save, cf, data);
+  *err = CURLE_OK;
   nread = Curl_ssl->recv_plain(cf, data, buf, len, err);
   if(nread > 0) {
     DEBUGASSERT((size_t)nread <= len);
@@ -1616,22 +1727,22 @@ static ssize_t ssl_cf_recv(struct Curl_cfilter *cf,
     /* eof */
     *err = CURLE_OK;
   }
-  DEBUGF(LOG_CF(data, cf, "cf_recv(len=%zu) -> %zd, %d", len, nread, *err));
+  CURL_TRC_CF(data, cf, "cf_recv(len=%zu) -> %zd, %d", len, nread, *err);
   CF_DATA_RESTORE(cf, save);
   return nread;
 }
 
-static int ssl_cf_get_select_socks(struct Curl_cfilter *cf,
+static void ssl_cf_adjust_pollset(struct Curl_cfilter *cf,
                                    struct Curl_easy *data,
-                                   curl_socket_t *socks)
+                                   struct easy_pollset *ps)
 {
   struct cf_call_data save;
-  int result;
 
-  CF_DATA_SAVE(save, cf, data);
-  result = Curl_ssl->get_select_socks(cf, data, socks);
-  CF_DATA_RESTORE(cf, save);
-  return result;
+  if(!cf->connected) {
+    CF_DATA_SAVE(save, cf, data);
+    Curl_ssl->adjust_pollset(cf, data, ps);
+    CF_DATA_RESTORE(cf, save);
+  }
 }
 
 static CURLcode ssl_cf_cntrl(struct Curl_cfilter *cf,
@@ -1717,12 +1828,12 @@ static bool cf_ssl_is_alive(struct Curl_cfilter *cf, struct Curl_easy *data,
 struct Curl_cftype Curl_cft_ssl = {
   "SSL",
   CF_TYPE_SSL,
-  CURL_LOG_DEFAULT,
+  CURL_LOG_LVL_NONE,
   ssl_cf_destroy,
   ssl_cf_connect,
   ssl_cf_close,
   Curl_cf_def_get_host,
-  ssl_cf_get_select_socks,
+  ssl_cf_adjust_pollset,
   ssl_cf_data_pending,
   ssl_cf_send,
   ssl_cf_recv,
@@ -1735,12 +1846,12 @@ struct Curl_cftype Curl_cft_ssl = {
 struct Curl_cftype Curl_cft_ssl_proxy = {
   "SSL-PROXY",
   CF_TYPE_SSL,
-  CURL_LOG_DEFAULT,
+  CURL_LOG_LVL_NONE,
   ssl_cf_destroy,
   ssl_cf_connect,
   ssl_cf_close,
   Curl_cf_def_get_host,
-  ssl_cf_get_select_socks,
+  ssl_cf_adjust_pollset,
   ssl_cf_data_pending,
   ssl_cf_send,
   ssl_cf_recv,
@@ -1834,19 +1945,6 @@ out:
   return result;
 }
 
-CURLcode Curl_ssl_cfilter_proxy_add(struct Curl_easy *data,
-                                    struct connectdata *conn,
-                                    int sockindex)
-{
-  struct Curl_cfilter *cf;
-  CURLcode result;
-
-  result = cf_ssl_proxy_create(&cf, data, conn);
-  if(!result)
-    Curl_conn_cf_add(data, conn, sockindex, cf);
-  return result;
-}
-
 CURLcode Curl_cf_ssl_proxy_insert_after(struct Curl_cfilter *cf_at,
                                         struct Curl_easy *data)
 {
@@ -1867,6 +1965,16 @@ bool Curl_ssl_supports(struct Curl_easy *data, int option)
   return (Curl_ssl->supports & option)? TRUE : FALSE;
 }
 
+static struct Curl_cfilter *get_ssl_filter(struct Curl_cfilter *cf)
+{
+  for(; cf; cf = cf->next) {
+    if(cf->cft == &Curl_cft_ssl || cf->cft == &Curl_cft_ssl_proxy)
+      return cf;
+  }
+  return NULL;
+}
+
+
 void *Curl_ssl_get_internals(struct Curl_easy *data, int sockindex,
                              CURLINFO info, int n)
 {
@@ -1874,8 +1982,8 @@ void *Curl_ssl_get_internals(struct Curl_easy *data, int sockindex,
   (void)n;
   if(data->conn) {
     struct Curl_cfilter *cf;
-    /* get first filter in chain, if any is present */
-    cf = Curl_ssl_cf_get_ssl(data->conn->cfilter[sockindex]);
+    /* get first SSL filter in chain, if any is present */
+    cf = get_ssl_filter(data->conn->cfilter[sockindex]);
     if(cf) {
       struct cf_call_data save;
       CF_DATA_SAVE(save, cf, data);
@@ -1905,23 +2013,6 @@ CURLcode Curl_ssl_cfilter_remove(struct Curl_easy *data,
   return result;
 }
 
-static struct Curl_cfilter *get_ssl_cf_engaged(struct connectdata *conn,
-                                               int sockindex)
-{
-  struct Curl_cfilter *cf, *lowest_ssl_cf = NULL;
-
-  for(cf = conn->cfilter[sockindex]; cf; cf = cf->next) {
-    if(cf->cft == &Curl_cft_ssl || cf->cft == &Curl_cft_ssl_proxy) {
-      lowest_ssl_cf = cf;
-      if(cf->connected || (cf->next && cf->next->connected)) {
-        /* connected or about to start */
-        return cf;
-      }
-    }
-  }
-  return lowest_ssl_cf;
-}
-
 bool Curl_ssl_cf_is_proxy(struct Curl_cfilter *cf)
 {
   return (cf->cft == &Curl_cft_ssl_proxy);
@@ -1938,17 +2029,6 @@ Curl_ssl_cf_get_config(struct Curl_cfilter *cf, struct Curl_easy *data)
 #endif
 }
 
-struct ssl_config_data *
-Curl_ssl_get_config(struct Curl_easy *data, int sockindex)
-{
-  struct Curl_cfilter *cf;
-
-  (void)data;
-  DEBUGASSERT(data->conn);
-  cf = get_ssl_cf_engaged(data->conn, sockindex);
-  return cf? Curl_ssl_cf_get_config(cf, data) : &data->set.ssl;
-}
-
 struct ssl_primary_config *
 Curl_ssl_cf_get_primary_config(struct Curl_cfilter *cf)
 {
@@ -1958,28 +2038,6 @@ Curl_ssl_cf_get_primary_config(struct Curl_cfilter *cf)
   return Curl_ssl_cf_is_proxy(cf)?
     &cf->conn->proxy_ssl_config : &cf->conn->ssl_config;
 #endif
-}
-
-struct ssl_primary_config *
-Curl_ssl_get_primary_config(struct Curl_easy *data,
-                            struct connectdata *conn,
-                            int sockindex)
-{
-  struct Curl_cfilter *cf;
-
-  (void)data;
-  DEBUGASSERT(conn);
-  cf = get_ssl_cf_engaged(conn, sockindex);
-  return cf? Curl_ssl_cf_get_primary_config(cf) : NULL;
-}
-
-struct Curl_cfilter *Curl_ssl_cf_get_ssl(struct Curl_cfilter *cf)
-{
-  for(; cf; cf = cf->next) {
-    if(cf->cft == &Curl_cft_ssl || cf->cft == &Curl_cft_ssl_proxy)
-      return cf;
-  }
-  return NULL;
 }
 
 CURLcode Curl_alpn_to_proto_buf(struct alpn_proto_buf *buf,
@@ -2047,10 +2105,6 @@ CURLcode Curl_alpn_set_negotiated(struct Curl_cfilter *cf,
     if(proto_len == ALPN_HTTP_1_1_LENGTH &&
        !memcmp(ALPN_HTTP_1_1, proto, ALPN_HTTP_1_1_LENGTH)) {
       *palpn = CURL_HTTP_VERSION_1_1;
-    }
-    else if(proto_len == ALPN_HTTP_1_0_LENGTH &&
-            !memcmp(ALPN_HTTP_1_0, proto, ALPN_HTTP_1_0_LENGTH)) {
-      *palpn = CURL_HTTP_VERSION_1_0;
     }
 #ifdef USE_HTTP2
     else if(proto_len == ALPN_H2_LENGTH &&

@@ -34,6 +34,9 @@ CURLcode curl_easy_setopt(CURL *handle, CURLOPT_REQUEST_TARGET, string);
 .SH DESCRIPTION
 Pass a char * to string which libcurl uses in the upcoming request instead of
 the path as extracted from the URL.
+
+libcurl passes on the verbatim string in its request without any filter or
+other safe guards. That includes white space and control characters.
 .SH DEFAULT
 NULL
 .SH PROTOCOLS
@@ -57,4 +60,7 @@ Added in 7.55.0
 .SH RETURN VALUE
 Returns CURLE_OK if the option is supported, and CURLE_UNKNOWN_OPTION if not.
 .SH "SEE ALSO"
-.BR CURLOPT_CUSTOMREQUEST "(3), " CURLOPT_HTTPGET "(3), "
+.BR CURLOPT_CUSTOMREQUEST (3),
+.BR CURLOPT_HTTPGET (3),
+.BR CURLOPT_PATH_AS_IS (3),
+.BR CURLOPT_URL (3)

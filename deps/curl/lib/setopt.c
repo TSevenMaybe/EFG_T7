@@ -171,7 +171,7 @@ static CURLcode protocol2num(const char *str, curl_prot_t *val)
     str = strchr(str, ',');
     tlen = str? (size_t) (str - token): strlen(token);
     if(tlen) {
-      const struct Curl_handler *h = Curl_builtin_scheme(token, tlen);
+      const struct Curl_handler *h = Curl_getn_scheme_handler(token, tlen);
 
       if(!h)
         return CURLE_UNSUPPORTED_PROTOCOL;
@@ -592,13 +592,9 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
      */
     argptr = va_arg(param, char *);
     if(argptr && !*argptr) {
-      argptr = Curl_all_content_encodings();
-      if(!argptr)
-        result = CURLE_OUT_OF_MEMORY;
-      else {
-        result = Curl_setstropt(&data->set.str[STRING_ENCODING], argptr);
-        free(argptr);
-      }
+      char all[256];
+      Curl_all_content_encodings(all, sizeof(all));
+      result = Curl_setstropt(&data->set.str[STRING_ENCODING], all);
     }
     else
       result = Curl_setstropt(&data->set.str[STRING_ENCODING], argptr);
@@ -666,17 +662,20 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       data->set.method = HTTPREQ_GET;
     break;
 
-#ifndef CURL_DISABLE_MIME
+#ifndef CURL_DISABLE_FORM_API
   case CURLOPT_HTTPPOST:
     /*
-     * Set to make us do HTTP POST
+     * Set to make us do HTTP POST. Legacy API-style.
      */
     data->set.httppost = va_arg(param, struct curl_httppost *);
     data->set.method = HTTPREQ_POST_FORM;
     data->set.opt_no_body = FALSE; /* this is implied */
+    Curl_mime_cleanpart(data->state.formp);
+    Curl_safefree(data->state.formp);
     break;
 #endif
 
+#if !defined(CURL_DISABLE_AWS)
   case CURLOPT_AWS_SIGV4:
     /*
      * String that is merged to some authentication
@@ -690,6 +689,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     if(data->set.str[STRING_AWS_SIGV4])
       data->set.httpauth = CURLAUTH_AWS_SIGV4;
     break;
+#endif
 
   case CURLOPT_REFERER:
     /*
@@ -807,15 +807,6 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
      * prevent the forthcoming read-cookies-from-file actions to accept
      * cookies that are marked as being session cookies, as they belong to a
      * previous session.
-     *
-     * In the original Netscape cookie spec, "session cookies" are cookies
-     * with no expire date set. RFC2109 describes the same action if no
-     * 'Max-Age' is set and RFC2965 includes the RFC2109 description and adds
-     * a 'Discard' action that can enforce the discard even for cookies that
-     * have a Max-Age.
-     *
-     * We run mostly with the original cookie spec, as hardly anyone implements
-     * anything else.
      */
     data->set.cookiesession = (0 != va_arg(param, long)) ? TRUE : FALSE;
     break;
@@ -985,6 +976,10 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     if(!result) {
       data->set.method = HTTPREQ_POST_MIME;
       data->set.opt_no_body = FALSE; /* this is implied */
+#ifndef CURL_DISABLE_FORM_API
+      Curl_mime_cleanpart(data->state.formp);
+      Curl_safefree(data->state.formp);
+#endif
     }
     break;
 
@@ -1237,6 +1232,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     data->set.out = va_arg(param, void *);
     break;
 
+#ifdef CURL_LIST_ONLY_PROTOCOL
   case CURLOPT_DIRLISTONLY:
     /*
      * An option that changes the command to one that asks for a list only, no
@@ -1244,7 +1240,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
      */
     data->set.list_only = (0 != va_arg(param, long)) ? TRUE : FALSE;
     break;
-
+#endif
   case CURLOPT_APPEND:
     /*
      * We want to upload and append to an existing file. Used for FTP and
@@ -1867,6 +1863,15 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
      */
     data->set.haproxyprotocol = (0 != va_arg(param, long)) ? TRUE : FALSE;
     break;
+  case CURLOPT_HAPROXY_CLIENT_IP:
+    /*
+     * Set the client IP to send through HAProxy PROXY protocol
+     */
+    result = Curl_setstropt(&data->set.str[STRING_HAPROXY_CLIENT_IP],
+                            va_arg(param, char *));
+    /* We enable implicitly the HAProxy protocol if we use this flag. */
+    data->set.haproxyprotocol = TRUE;
+    break;
 #endif
   case CURLOPT_INTERFACE:
     /*
@@ -1876,6 +1881,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     result = Curl_setstropt(&data->set.str[STRING_DEVICE],
                             va_arg(param, char *));
     break;
+#ifndef CURL_DISABLE_BINDLOCAL
   case CURLOPT_LOCALPORT:
     /*
      * Set what local port to bind the socket to when performing an operation.
@@ -1894,6 +1900,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       return CURLE_BAD_FUNCTION_ARGUMENT;
     data->set.localportrange = curlx_sltous(arg);
     break;
+#endif
   case CURLOPT_GSSAPI_DELEGATION:
     /*
      * GSS-API credential delegation bitmask
@@ -1910,10 +1917,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       TRUE : FALSE;
 
     /* Update the current connection ssl_config. */
-    if(data->conn) {
-      data->conn->ssl_config.verifypeer =
-        data->set.ssl.primary.verifypeer;
-    }
+    Curl_ssl_conn_config_update(data, FALSE);
     break;
 #ifndef CURL_DISABLE_DOH
   case CURLOPT_DOH_SSL_VERIFYPEER:
@@ -1933,10 +1937,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       (0 != va_arg(param, long))?TRUE:FALSE;
 
     /* Update the current connection proxy_ssl_config. */
-    if(data->conn) {
-      data->conn->proxy_ssl_config.verifypeer =
-        data->set.proxy_ssl.primary.verifypeer;
-    }
+    Curl_ssl_conn_config_update(data, TRUE);
     break;
 #endif
   case CURLOPT_SSL_VERIFYHOST:
@@ -1951,10 +1952,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     data->set.ssl.primary.verifyhost = (bool)((arg & 3) ? TRUE : FALSE);
 
     /* Update the current connection ssl_config. */
-    if(data->conn) {
-      data->conn->ssl_config.verifyhost =
-        data->set.ssl.primary.verifyhost;
-    }
+    Curl_ssl_conn_config_update(data, FALSE);
     break;
 #ifndef CURL_DISABLE_DOH
   case CURLOPT_DOH_SSL_VERIFYHOST:
@@ -1976,12 +1974,8 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
 
     /* Treat both 1 and 2 as TRUE */
     data->set.proxy_ssl.primary.verifyhost = (bool)((arg & 3)?TRUE:FALSE);
-
     /* Update the current connection proxy_ssl_config. */
-    if(data->conn) {
-      data->conn->proxy_ssl_config.verifyhost =
-        data->set.proxy_ssl.primary.verifyhost;
-    }
+    Curl_ssl_conn_config_update(data, TRUE);
     break;
 #endif
   case CURLOPT_SSL_VERIFYSTATUS:
@@ -1997,10 +1991,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       TRUE : FALSE;
 
     /* Update the current connection ssl_config. */
-    if(data->conn) {
-      data->conn->ssl_config.verifystatus =
-        data->set.ssl.primary.verifystatus;
-    }
+    Curl_ssl_conn_config_update(data, FALSE);
     break;
 #ifndef CURL_DISABLE_DOH
   case CURLOPT_DOH_SSL_VERIFYSTATUS:
@@ -2056,7 +2047,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     else
 #endif
       result = CURLE_NOT_BUILT_IN;
-        break;
+    break;
   case CURLOPT_PINNEDPUBLICKEY:
     /*
      * Set pinned public key for SSL connection.
@@ -2711,7 +2702,7 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     /* Set the list of mail recipients */
     data->set.mail_rcpt = va_arg(param, struct curl_slist *);
     break;
-  case CURLOPT_MAIL_RCPT_ALLLOWFAILS:
+  case CURLOPT_MAIL_RCPT_ALLOWFAILS:
     /* allow RCPT TO command to fail for some recipients */
     data->set.mail_rcpt_allowfails = (0 != va_arg(param, long)) ? TRUE : FALSE;
     break;
@@ -3075,18 +3066,18 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
       /* this needs to build a list of file names to read from, so that it can
          read them later, as we might get a shared HSTS handle to load them
          into */
-      h = curl_slist_append(data->set.hstslist, argptr);
+      h = curl_slist_append(data->state.hstslist, argptr);
       if(!h) {
-        curl_slist_free_all(data->set.hstslist);
-        data->set.hstslist = NULL;
+        curl_slist_free_all(data->state.hstslist);
+        data->state.hstslist = NULL;
         return CURLE_OUT_OF_MEMORY;
       }
-      data->set.hstslist = h; /* store the list for later use */
+      data->state.hstslist = h; /* store the list for later use */
     }
     else {
       /* clear the list of HSTS files */
-      curl_slist_free_all(data->set.hstslist);
-      data->set.hstslist = NULL;
+      curl_slist_free_all(data->state.hstslist);
+      data->state.hstslist = NULL;
       if(!data->share || !data->share->hsts)
         /* throw away the HSTS cache unless shared */
         Curl_hsts_cleanup(&data->hsts);

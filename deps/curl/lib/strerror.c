@@ -938,7 +938,7 @@ const char *Curl_winapi_strerror(DWORD err, char *buf, size_t buflen)
 
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
   if(!get_winapi_error(err, buf, buflen)) {
-    msnprintf(buf, buflen, "Unknown error %u (0x%08X)", err, err);
+    msnprintf(buf, buflen, "Unknown error %lu (0x%08lX)", err, err);
   }
 #else
   {
@@ -986,6 +986,10 @@ const char *Curl_sspi_strerror(int err, char *buf, size_t buflen)
       break;
 #define SEC2TXT(sec) case sec: txt = #sec; break
     SEC2TXT(CRYPT_E_REVOKED);
+    SEC2TXT(CRYPT_E_NO_REVOCATION_DLL);
+    SEC2TXT(CRYPT_E_NO_REVOCATION_CHECK);
+    SEC2TXT(CRYPT_E_REVOCATION_OFFLINE);
+    SEC2TXT(CRYPT_E_NOT_IN_REVOCATION_DATABASE);
     SEC2TXT(SEC_E_ALGORITHM_MISMATCH);
     SEC2TXT(SEC_E_BAD_BINDINGS);
     SEC2TXT(SEC_E_BAD_PKGID);

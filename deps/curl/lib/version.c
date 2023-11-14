@@ -300,7 +300,7 @@ char *curl_version(void)
    protocol line has its own #if line to make things easier on the eye.
  */
 
-static const char * const protocols[] = {
+static const char * const supported_protocols[] = {
 #ifndef CURL_DISABLE_DICT
   "dict",
 #endif
@@ -409,7 +409,8 @@ static int idn_present(curl_version_info_data *info)
 #define idn_present     NULL
 #endif
 
-#if defined(USE_SSL) && !defined(CURL_DISABLE_PROXY)
+#if defined(USE_SSL) && !defined(CURL_DISABLE_PROXY) && \
+  !defined(CURL_DISABLE_HTTP)
 static int https_proxy_present(curl_version_info_data *info)
 {
   (void) info;
@@ -460,7 +461,8 @@ static const struct feat features_table[] = {
 #if defined(ENABLE_QUIC)
   FEATURE("HTTP3",       NULL,                CURL_VERSION_HTTP3),
 #endif
-#if defined(USE_SSL) && !defined(CURL_DISABLE_PROXY)
+#if defined(USE_SSL) && !defined(CURL_DISABLE_PROXY) && \
+  !defined(CURL_DISABLE_HTTP)
   FEATURE("HTTPS-proxy", https_proxy_present, CURL_VERSION_HTTPS_PROXY),
 #endif
 #if defined(USE_LIBIDN2) || defined(USE_WIN32_IDN)
@@ -535,7 +537,7 @@ static curl_version_info_data version_info = {
   NULL, /* ssl_version */
   0,    /* ssl_version_num, this is kept at zero */
   NULL, /* zlib_version */
-  protocols,
+  supported_protocols,
   NULL, /* c-ares version */
   0,    /* c-ares version numerical */
   NULL, /* libidn version */
